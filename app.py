@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from price_reports import add_report, latest_reports
+from price_reports import add_report, latest_reports, price_history
 
 
 class FuelType(StrEnum):
@@ -204,3 +204,16 @@ def report_station_price(station_id: str, report: PriceReportInput) -> dict:
     """Save an unverified user report. No account or receipt photo is collected."""
     find_station(station_id)
     return add_report(station_id, report.fuel_type.value, report.price)
+
+
+@app.get("/v1/stations/{station_id}/prices/history")
+def station_price_history(
+    station_id: str,
+    fuel_type: FuelType = FuelType.regular,
+    days: int | None = Query(default=None, ge=1, le=365),
+) -> dict:
+    """Return actual saved reports, oldest first; fictional seed prices are excluded."""
+    find_station(station_id)
+    reports = price_history(station_id, fuel_type.value, days)
+    return {"station_id": station_id, "fuel_type": fuel_type.value,
+            "days": days, "price_unit": "USD per gallon", "reports": reports}

@@ -1,14 +1,23 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app import app
+import price_reports
 
 
 class GasApiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.database_directory = tempfile.TemporaryDirectory()
+        price_reports.DATABASE_PATH = Path(cls.database_directory.name) / "reports.sqlite3"
         cls.client = TestClient(app)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.database_directory.cleanup()
 
     def test_stations_are_clearly_sample_data(self):
         response = self.client.get("/stations")
@@ -64,6 +73,26 @@ class GasApiTests(unittest.TestCase):
                                           json={"fuel_type": "regular", "price": 3.2}).status_code, 404)
         self.assertEqual(self.client.post("/v1/stations/station-1/prices",
                                           json={"fuel_type": "regular", "price": -2}).status_code, 422)
+
+    def test_history_filters_fuel_and_time_without_seed_prices(self):
+        self.client.post("/v1/stations/station-2/prices",
+                         json={"fuel_type": "regular", "price": 3.51})
+        self.client.post("/v1/stations/station-2/prices",
+                         json={"fuel_type": "regular", "price": 3.47})
+        self.client.post("/v1/stations/station-2/prices",
+                         json={"fuel_type": "diesel", "price": 3.91})
+        with price_reports.connect() as connection:
+            connection.execute("""INSERT INTO price_reports
+                (station_id, fuel_type, price, reported_at) VALUES (?, ?, ?, ?)""",
+                ("station-2", "regular", 2.99, "2020-01-01T00:00:00+00:00"))
+        recent = self.client.get("/v1/stations/station-2/prices/history?fuel_type=regular&days=7")
+        self.assertEqual(recent.status_code, 200)
+        self.assertEqual([item["price"] for item in recent.json()["reports"]], [3.51, 3.47])
+        all_time = self.client.get("/v1/stations/station-2/prices/history?fuel_type=regular")
+        self.assertEqual([item["price"] for item in all_time.json()["reports"]], [2.99, 3.51, 3.47])
+        self.assertEqual(self.client.get("/v1/stations/station-3/prices/history").json()["reports"], [])
+        self.assertEqual(self.client.get("/v1/stations/station-2/prices/history?days=0").status_code, 422)
+        self.assertEqual(self.client.get("/v1/stations/nope/prices/history").status_code, 404)
 
     def test_bad_inputs_have_http_errors(self):
         self.assertEqual(self.client.get("/stations/no-such-station").status_code, 404)
