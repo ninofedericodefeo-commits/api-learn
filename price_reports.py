@@ -20,7 +20,31 @@ def connect() -> sqlite3.Connection:
     )""")
     connection.execute("""CREATE INDEX IF NOT EXISTS price_reports_history
         ON price_reports (station_id, fuel_type, reported_at)""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS station_locations (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        address TEXT NOT NULL,
+        city TEXT NOT NULL,
+        state TEXT NOT NULL
+    )""")
     return connection
+
+
+def remember_stations(stations: list[dict]) -> None:
+    with connect() as connection:
+        connection.executemany("""INSERT INTO station_locations
+            (id, name, latitude, longitude, address, city, state)
+            VALUES (:id, :name, :latitude, :longitude, :address, :city, :state)
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name, latitude=excluded.latitude,
+            longitude=excluded.longitude, address=excluded.address, city=excluded.city,
+            state=excluded.state""", stations)
+
+
+def known_station(station_id: str) -> bool:
+    with connect() as connection:
+        return connection.execute("SELECT 1 FROM station_locations WHERE id = ?", (station_id,)).fetchone() is not None
 
 
 def add_report(station_id: str, fuel_type: str, price: float) -> dict:

@@ -2,10 +2,12 @@
 
 from decimal import Decimal, ROUND_HALF_UP
 from enum import StrEnum
+from time import monotonic
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from price_reports import add_report, latest_reports, price_history
+from osm_stations import search_stations
+from price_reports import add_report, known_station, latest_reports, price_history, remember_stations
 
 
 class FuelType(StrEnum):
@@ -89,11 +91,19 @@ app = FastAPI(
     version="0.1.0",
 )
 
+NEARBY_CACHE: dict[tuple[float, float, float], tuple[float, list[dict]]] = {}
+
 
 def find_station(station_id: str) -> Station:
     for station in STATIONS:
         if station.id == station_id:
             return station
+    raise HTTPException(status_code=404, detail="Station not found")
+
+
+def require_known_station(station_id: str) -> None:
+    if any(station.id == station_id for station in STATIONS) or known_station(station_id):
+        return
     raise HTTPException(status_code=404, detail="Station not found")
 
 
@@ -202,7 +212,7 @@ def sample_stations() -> dict:
 @app.post("/v1/stations/{station_id}/prices", status_code=201)
 def report_station_price(station_id: str, report: PriceReportInput) -> dict:
     """Save an unverified user report. No account or receipt photo is collected."""
-    find_station(station_id)
+    require_known_station(station_id)
     return add_report(station_id, report.fuel_type.value, report.price)
 
 
@@ -213,7 +223,40 @@ def station_price_history(
     days: int | None = Query(default=None, ge=1, le=365),
 ) -> dict:
     """Return actual saved reports, oldest first; fictional seed prices are excluded."""
-    find_station(station_id)
+    require_known_station(station_id)
     reports = price_history(station_id, fuel_type.value, days)
     return {"station_id": station_id, "fuel_type": fuel_type.value,
             "days": days, "price_unit": "USD per gallon", "reports": reports}
+
+
+@app.get("/v1/stations/nearby")
+def real_nearby_stations(
+    latitude: float = Query(ge=-90, le=90, allow_inf_nan=False),
+    longitude: float = Query(ge=-180, le=180, allow_inf_nan=False),
+    radiusMiles: float = Query(default=5, gt=0, le=25, allow_inf_nan=False),
+) -> dict:
+    """Fetch real station locations; prices come only from saved user reports."""
+    cache_key = (round(latitude, 3), round(longitude, 3), radiusMiles)
+    cached = NEARBY_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] < 900:
+        stations = cached[1]
+    else:
+        try:
+            stations = search_stations(latitude, longitude, radiusMiles)
+        except (OSError, ValueError, TimeoutError) as error:
+            if cached:
+                stations = cached[1]
+            else:
+                raise HTTPException(status_code=502, detail="Real station locations are unavailable right now") from error
+        else:
+            NEARBY_CACHE[cache_key] = (monotonic(), stations)
+            remember_stations(stations)
+    reports = latest_reports()
+    results = []
+    for station in stations:
+        prices = [{"fuelType": fuel_type, "price": report["price"], "currency": "USD",
+                   "reportedAt": report["reported_at"], "source": "community"}
+                  for fuel_type in FuelType if (report := reports.get((station["id"], fuel_type.value)))]
+        results.append({**station, "prices": prices})
+    return {"provider": "OpenStreetMap", "stations": results,
+            "locations_cached": cached is not None and stations is cached[1]}

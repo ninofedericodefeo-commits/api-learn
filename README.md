@@ -1,6 +1,6 @@
 # Gas prices API
 
-A small local API for exploring gas station prices and estimating fill-up costs. **All stations and prices are fictional sample data, not live gas prices.** No API key or external service is needed.
+A small local API for exploring gas station prices and estimating fill-up costs. The original sample stations and prices are fictional. `GET /v1/stations/nearby` looks up real fuel station locations from OpenStreetMap through a free public Overpass server; this requires an internet connection, but no key or billing account. It does not supply live gas prices. Saved price reports are unverified.
 
 ## Run it
 
@@ -54,8 +54,17 @@ For a phone on the same trusted Wi-Fi, run Uvicorn with `--host 0.0.0.0` and
 set the app URL to your computer's private LAN IP. This exposes the unauthenticated
 report route to devices on that network, so use it only while testing locally.
 
+`GET /v1/stations/nearby?latitude=39.9526&longitude=-75.1652&radiusMiles=5`
+returns real OpenStreetMap fuel station locations, with any price reports saved in
+the local SQLite database. Station coordinates and radius are sent by this local
+API to a public Overpass server. Results are cached in memory for 15 minutes to
+avoid repeat requests. The result includes OpenStreetMap attribution. The public
+Overpass service can be slow or unavailable; it is suitable for personal testing,
+not a guaranteed production location service.
+
 Set `EXPO_PUBLIC_SAMPLE_API_URL=http://localhost:8000` in the app's `.env.local` for an iOS
-simulator. A physical phone needs a reachable HTTPS deployment. This learning API has no
+simulator. A development build on a phone can use your Mac's private LAN IP on the
+same trusted Wi-Fi. This learning API has no
 accounts, authentication, moderation, or rate limit: **do not expose its write endpoint
 publicly until those protections are added**. GitHub hosting of this source does not run
 an API server or synchronize a database by itself.

@@ -1,11 +1,13 @@
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import app
+from app import app, NEARBY_CACHE
 import price_reports
+from osm_stations import normalize_station
 
 
 class GasApiTests(unittest.TestCase):
@@ -93,6 +95,31 @@ class GasApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/v1/stations/station-3/prices/history").json()["reports"], [])
         self.assertEqual(self.client.get("/v1/stations/station-2/prices/history?days=0").status_code, 422)
         self.assertEqual(self.client.get("/v1/stations/nope/prices/history").status_code, 404)
+
+    def test_real_station_locations_and_local_price_reports(self):
+        NEARBY_CACHE.clear()
+        raw = {"type": "node", "id": 123, "lat": 39.95, "lon": -75.16,
+               "tags": {"amenity": "fuel", "name": "Real Fuel", "addr:street": "Main St",
+                        "addr:housenumber": "15", "addr:city": "Philadelphia", "addr:state": "PA"}}
+        station = normalize_station(raw)
+        self.assertEqual(station["address"], "15 Main St")
+        self.assertIsNone(normalize_station({**raw, "tags": {"amenity": "restaurant"}}))
+        with patch("app.search_stations", return_value=[station]) as lookup:
+            first = self.client.get("/v1/stations/nearby?latitude=39.95&longitude=-75.16&radiusMiles=5")
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["provider"], "OpenStreetMap")
+            self.assertEqual(first.json()["stations"][0]["prices"], [])
+            second = self.client.get("/v1/stations/nearby?latitude=39.95&longitude=-75.16&radiusMiles=5")
+            self.assertEqual(second.status_code, 200)
+            lookup.assert_called_once()
+        posted = self.client.post("/v1/stations/osm-node-123/prices",
+                                  json={"fuel_type": "regular", "price": 3.21})
+        self.assertEqual(posted.status_code, 201)
+        updated = self.client.get("/v1/stations/nearby?latitude=39.95&longitude=-75.16&radiusMiles=5")
+        self.assertEqual(updated.json()["stations"][0]["prices"][0]["price"], 3.21)
+        history = self.client.get("/v1/stations/osm-node-123/prices/history?fuel_type=regular")
+        self.assertEqual(history.json()["reports"][0]["price"], 3.21)
+        self.assertEqual(self.client.get("/v1/stations/nearby?latitude=200&longitude=0").status_code, 422)
 
     def test_bad_inputs_have_http_errors(self):
         self.assertEqual(self.client.get("/stations/no-such-station").status_code, 404)
