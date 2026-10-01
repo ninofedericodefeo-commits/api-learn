@@ -21,18 +21,18 @@ class GasApiTests(unittest.TestCase):
 
     def test_filter_by_city_and_price(self):
         response = self.client.get(
-            "/stations", params={"city": "ALBANY", "fuel_type": "regular", "max_price": 3.40}
+            "/stations", params={"city": "PHILADELPHIA", "fuel_type": "regular", "max_price": 3.40}
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual([station["id"] for station in response.json()["stations"]], ["station-1"])
+        self.assertEqual([station["id"] for station in response.json()["stations"]], ["station-1", "station-3"])
 
     def test_summary_uses_only_matching_stations(self):
-        response = self.client.get("/prices/summary", params={"city": "Albany"})
+        response = self.client.get("/prices/summary", params={"city": "Philadelphia"})
         self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["station_count"], 2)
+        self.assertEqual(body["station_count"], 4)
         self.assertEqual(body["average_price"], 3.42)
-        self.assertEqual(body["cheapest_station_id"], "station-1")
+        self.assertEqual(body["cheapest_station_id"], "station-3")
 
     def test_estimate_uses_selected_station_and_fuel(self):
         response = self.client.get(
@@ -47,6 +47,23 @@ class GasApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["estimated_cost"], 1.70)
+
+    def test_sample_endpoint_and_price_report(self):
+        response = self.client.get("/v1/stations/sample")
+        self.assertEqual(response.status_code, 200)
+        station = response.json()["stations"][0]
+        self.assertEqual(station["prices"][0]["source"], "sample")
+        self.assertIn("latitude", station)
+        posted = self.client.post("/v1/stations/station-1/prices",
+                                  json={"fuel_type": "regular", "price": 3.27})
+        self.assertEqual(posted.status_code, 201)
+        updated = self.client.get("/v1/stations/sample").json()["stations"][0]
+        self.assertEqual(updated["prices"][0]["price"], 3.27)
+        self.assertEqual(updated["prices"][0]["source"], "community")
+        self.assertEqual(self.client.post("/v1/stations/nope/prices",
+                                          json={"fuel_type": "regular", "price": 3.2}).status_code, 404)
+        self.assertEqual(self.client.post("/v1/stations/station-1/prices",
+                                          json={"fuel_type": "regular", "price": -2}).status_code, 422)
 
     def test_bad_inputs_have_http_errors(self):
         self.assertEqual(self.client.get("/stations/no-such-station").status_code, 404)

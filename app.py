@@ -4,7 +4,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from enum import StrEnum
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from price_reports import add_report, latest_reports
 
 
 class FuelType(StrEnum):
@@ -20,6 +21,9 @@ class Station(BaseModel):
     city: str
     state: str
     prices: dict[FuelType, float]
+    latitude: float
+    longitude: float
+    address: str
     sample_data: bool = True
 
 
@@ -54,22 +58,26 @@ class CostEstimate(BaseModel):
 
 STATIONS = [
     Station(
-        id="station-1", name="Example Fuel North", city="Albany", state="NY",
+        id="station-1", name="Example Fuel North", city="Philadelphia", state="PA",
+        latitude=39.9526, longitude=-75.1652, address="123 Market St",
         prices={FuelType.regular: 3.39, FuelType.midgrade: 3.69,
                 FuelType.premium: 3.99, FuelType.diesel: 3.89},
     ),
     Station(
-        id="station-2", name="Example Fuel Central", city="Albany", state="NY",
+        id="station-2", name="Example Fuel Central", city="Philadelphia", state="PA",
+        latitude=39.9535, longitude=-75.1622, address="45 Chestnut Ave",
         prices={FuelType.regular: 3.45, FuelType.midgrade: 3.75,
                 FuelType.premium: 4.05, FuelType.diesel: 3.95},
     ),
     Station(
-        id="station-3", name="Example Fuel East", city="Troy", state="NY",
+        id="station-3", name="Example Fuel East", city="Philadelphia", state="PA",
+        latitude=39.9492, longitude=-75.1701, address="88 Walnut St",
         prices={FuelType.regular: 3.35, FuelType.midgrade: 3.65,
                 FuelType.premium: 3.95, FuelType.diesel: 3.85},
     ),
     Station(
-        id="station-4", name="Example Fuel West", city="Schenectady", state="NY",
+        id="station-4", name="Example Fuel West", city="Philadelphia", state="PA",
+        latitude=39.9457, longitude=-75.1576, address="202 Broad St",
         prices={FuelType.regular: 3.49, FuelType.midgrade: 3.79,
                 FuelType.premium: 4.09, FuelType.diesel: 3.99},
     ),
@@ -163,3 +171,36 @@ def estimate_cost(
             )
         ),
     )
+
+
+class PriceReportInput(BaseModel):
+    fuel_type: FuelType
+    price: float = Field(gt=0, le=30, allow_inf_nan=False)
+
+
+@app.get("/v1/stations/sample")
+def sample_stations() -> dict:
+    """App-facing station list. Community prices replace the seed price for that fuel."""
+    reports = latest_reports()
+    stations = []
+    for station in STATIONS:
+        prices = []
+        for fuel_type, seed_price in station.prices.items():
+            report = reports.get((station.id, fuel_type.value))
+            prices.append({"fuelType": fuel_type.value,
+                           "price": report["price"] if report else seed_price,
+                           "currency": "USD",
+                           "reportedAt": report["reported_at"] if report else "2026-01-01T00:00:00Z",
+                           "source": "community" if report else "sample"})
+        stations.append({"id": station.id, "name": station.name,
+                         "latitude": station.latitude, "longitude": station.longitude,
+                         "address": station.address, "city": station.city,
+                         "state": station.state, "prices": prices})
+    return {"provider": "api-learn", "sample_data": True, "stations": stations}
+
+
+@app.post("/v1/stations/{station_id}/prices", status_code=201)
+def report_station_price(station_id: str, report: PriceReportInput) -> dict:
+    """Save an unverified user report. No account or receipt photo is collected."""
+    find_station(station_id)
+    return add_report(station_id, report.fuel_type.value, report.price)

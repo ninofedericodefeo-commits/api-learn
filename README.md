@@ -34,3 +34,19 @@ UV_CACHE_DIR=/tmp/api-learn-uv-cache uv run --frozen python -m unittest discover
 ```
 
 To use real prices later, you would need a data provider and its terms, coverage, update frequency, and possibly an API key. The sample data in `app.py` can be replaced once you choose one.
+
+## Use it with GasFinder
+
+The Expo app reads `GET /v1/stations/sample` and submits a manually entered pump price with
+`POST /v1/stations/{station_id}/prices` (`{"fuel_type":"regular","price":3.27}`).
+The four fictional Philadelphia stations live in this repository. The latest community report
+for each station and fuel replaces its sample price in the app response and is marked
+`source: "community"`; all other prices remain clearly labeled as fictional samples.
+Reports are saved in `price_reports.sqlite3` (or `GAS_API_DB_PATH`) and survive restarts.
+The app does not upload receipt photos or personal savings data.
+
+Set `EXPO_PUBLIC_SAMPLE_API_URL=http://localhost:8000` in the app's `.env.local` for an iOS
+simulator. A physical phone needs a reachable HTTPS deployment. This learning API has no
+accounts, authentication, moderation, or rate limit: **do not expose its write endpoint
+publicly until those protections are added**. GitHub hosting of this source does not run
+an API server or synchronize a database by itself.
